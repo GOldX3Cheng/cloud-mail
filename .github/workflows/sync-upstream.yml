@@ -1,0 +1,40 @@
+name: Sync upstream
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # 每天 UTC 00:00（北京时间 08:00）同步上游
+  workflow_dispatch: # 可手动强制同步
+
+jobs:
+  sync-upstream:
+    name: Sync from maillab/cloud-mail
+    runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 用 PAT 而不是 GITHUB_TOKEN 推送：GITHUB_TOKEN 产生的推送不会触发下游 on:push 工作流
+      - name: Sync upstream
+        id: sync
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          upstream_sync_repo: maillab/cloud-mail
+          upstream_sync_branch: main
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GH_PAT }}
+          test_mode: false
+
+      - name: Result
+        run: |
+          echo "has_new_commits=${{ steps.sync.outputs.has_new_commits }}"
+          if [ "${{ steps.sync.outputs.has_new_commits }}" = "true" ]; then
+            echo "上游有更新，本次推送会自动触发 Deploy cloud-mail 工作流"
+          else
+            echo "上游无更新，跳过部署"
+          fi
