@@ -246,15 +246,24 @@ jobs:
             exit 1
           fi
           
-          HTTP_CODE=$(curl -sL -w "%{http_code}" -o response.txt "$WORKER_URL/api/init/${JWT_SECRET}")
-          RESPONSE_BODY=$(cat response.txt)
+          # 刚部署完自定义域名的路由/证书需要几秒收敛，单次 curl 会失败。
+          # 改为最多重试 10 次、间隔 15 秒（总计约 2.5 分钟）。
+          RESPONSE_BODY=""
+          HTTP_CODE="000"
+          for i in $(seq 1 10); do
+            HTTP_CODE=$(curl -sL --max-time 30 -w "%{http_code}" -o response.txt "$WORKER_URL/api/init/${JWT_SECRET}" || echo "000")
+            RESPONSE_BODY=$(cat response.txt 2>/dev/null || echo "")
+            if [ "$RESPONSE_BODY" = "success" ]; then
+              echo "✅ Setup completed. (attempt ${i}/10)"
+              exit 0
+            fi
+            echo "⏳ attempt ${i}/10 -> HTTP ${HTTP_CODE}, body: ${RESPONSE_BODY:0:80}"
+            rm -f response.txt
+            sleep 15
+          done
 
-          if [ "$RESPONSE_BODY" = "success" ]; then
-            echo "✅ Setup completed."
-          else
-            echo "❌ Failed. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
-            exit 1
-          fi
+          echo "❌ Failed after 10 attempts. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
+          exit 1
 
       - name: 🗑️ Delete workflow runs
         uses: GitRML/delete-workflow-runs@main
