@@ -19,22 +19,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 用 PAT 而不是 GITHUB_TOKEN 推送：GITHUB_TOKEN 产生的推送不会触发下游 on:push 工作流
-      - name: Sync upstream
-        id: sync
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
-        with:
-          upstream_sync_repo: maillab/cloud-mail
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GH_PAT }}
-          test_mode: false
-
-      - name: Result
+      # 直接用 PAT 做 merge + push。
+      # 不能用 GITHUB_TOKEN：它属于 GitHub App，没有 workflows 权限，上游一旦改动
+      # .github/workflows/ 下的文件就会被拒绝推送（refusing to allow a GitHub App to
+      # create or update workflow ... without workflows permission）。
+      - name: Merge upstream and push
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          echo "has_new_commits=${{ steps.sync.outputs.has_new_commits }}"
-          if [ "${{ steps.sync.outputs.has_new_commits }}" = "true" ]; then
-            echo "上游有更新，本次推送会自动触发 Deploy cloud-mail 工作流"
-          else
-            echo "上游无更新，跳过部署"
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/maillab/cloud-mail.git 2>/dev/null || true
+          git fetch upstream main --unshallow 2>/dev/null || git fetch upstream main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "上游无新提交，跳过"
+            exit 0
           fi
+
+          COUNT=$(git rev-list --count HEAD..upstream/main)
+          echo "上游领先 ${COUNT} 个提交，开始合并"
+          git merge upstream/main --no-ff -m "chore: sync upstream maillab/cloud-mail (${COUNT} commits) at $(git rev-parse --short upstream/main)"
+
+          git remote set-url origin "https://${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:main
+
+          echo "已推送。PAT 推送会触发 Deploy cloud-mail 工作流。"
