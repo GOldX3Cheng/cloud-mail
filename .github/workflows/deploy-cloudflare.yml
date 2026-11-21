@@ -246,23 +246,33 @@ jobs:
             exit 1
           fi
           
-          # 刚部署完自定义域名的路由/证书需要几秒收敛，单次 curl 会失败。
-          # 改为最多重试 10 次、间隔 15 秒（总计约 2.5 分钟）。
+          # 说明：本仓库所在 zone 开启了 Bot Fight Mode，会质询 GitHub Actions 的云 IP，
+          # 返回 HTTP 403 且正文为 Cloudflare 的 "Just a moment..." 质询页。
+          # 免费版 Bot Fight Mode 不受 WAF 自定义规则约束，无法按路径豁免，
+          # 因此这里区分处理：被质询 -> 告警并跳过（不判失败）；其它错误 -> 仍然失败退出。
           RESPONSE_BODY=""
           HTTP_CODE="000"
-          for i in $(seq 1 10); do
+          for i in $(seq 1 3); do
             HTTP_CODE=$(curl -sL --max-time 30 -w "%{http_code}" -o response.txt "$WORKER_URL/api/init/${JWT_SECRET}" || echo "000")
             RESPONSE_BODY=$(cat response.txt 2>/dev/null || echo "")
+
             if [ "$RESPONSE_BODY" = "success" ]; then
-              echo "✅ Setup completed. (attempt ${i}/10)"
+              echo "✅ Setup completed. (attempt ${i}/3)"
               exit 0
             fi
-            echo "⏳ attempt ${i}/10 -> HTTP ${HTTP_CODE}, body: ${RESPONSE_BODY:0:80}"
+
+            if echo "$RESPONSE_BODY" | grep -q "Just a moment"; then
+              echo "::warning::数据库初始化被 Cloudflare Bot Fight Mode 质询（HTTP ${HTTP_CODE}），已跳过。"
+              echo "::warning::请从非云 IP 的网络访问 ${WORKER_URL}/api/init/<JWT_SECRET> 手动完成迁移，或在 zone 关闭 Bot Fight Mode。"
+              exit 0
+            fi
+
+            echo "⏳ attempt ${i}/3 -> HTTP ${HTTP_CODE}, body: ${RESPONSE_BODY:0:120}"
             rm -f response.txt
             sleep 15
           done
 
-          echo "❌ Failed after 10 attempts. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
+          echo "❌ Failed after 3 attempts. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
           exit 1
 
       - name: 🗑️ Delete workflow runs
